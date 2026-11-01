@@ -31,6 +31,7 @@ public class PlutoGame : MonoBehaviour
     public HUDManager Hud { get; private set; }
     public TutorialManager Tutorial { get; private set; }
     public MissionManager Missions { get; private set; }
+    public RescueMission Rescue { get; private set; }
     public Transform Arena => Placement.Arena;
     public int Difficulty { get; private set; }
 
@@ -64,6 +65,8 @@ public class PlutoGame : MonoBehaviour
         Tutorial.Init(this);
         Missions = gameObject.AddComponent<MissionManager>();
         Missions.Init(this);
+        Rescue = gameObject.AddComponent<RescueMission>();
+        Rescue.Init(this);
 
         SetDifficulty(PlayerPrefs.GetInt("difficulty", 0));
     }
@@ -168,6 +171,14 @@ public class PlutoGame : MonoBehaviour
         Hud.AddEyebrow("PRACTICE MISSIONS");
         Hud.AddTitle("Choose your challenge", PlutoTheme.Title + 4);
         Hud.AddMissionCards(cards);
+        Hud.AddBonusCard(new MissionCard
+        {
+            Number = "BONUS SCENARIO",
+            Name = RescueMission.Name,
+            Description = RescueMission.Description,
+            Best = RescueMission.Best(),
+            Fly = StartRescue
+        });
         Hud.AddButtonRow(88f, new DialogButton("Back", ButtonStyle.Ghost, ShowMenu));
     }
 
@@ -175,6 +186,12 @@ public class PlutoGame : MonoBehaviour
     {
         BeginMode();
         Tutorial.Begin();
+    }
+
+    public void StartRescue()
+    {
+        BeginMode();
+        Rescue.Begin();
     }
 
     public void StartMission(int index)
@@ -245,6 +262,7 @@ public class PlutoGame : MonoBehaviour
         Time.timeScale = 1f;
         Tutorial.Stop();
         Missions.Stop();
+        Rescue.Stop();
         Hud.ClearObjective();
         Hud.SetTimer("");
         Hud.SetAltitudeTarget(null);

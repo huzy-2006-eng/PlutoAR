@@ -217,9 +217,18 @@ public abstract class GuidedMode : MonoBehaviour
         spawned.Clear();
     }
 
+    // Modes can freeze timers and dwell checks (e.g. during AR tracking loss).
+    protected virtual bool Paused => false;
+
     protected virtual void Update()
     {
         if (!runner.Running) return;
+        if (Paused)
+        {
+            Hud.SetObjectiveDetail(FlightHelpers.Warn("Paused while tracking is lost. Timer and holds resume when it returns."));
+            nextUi = 0f;
+            return;
+        }
         runner.Tick(Time.deltaTime);
         if (!runner.Running) return;
 

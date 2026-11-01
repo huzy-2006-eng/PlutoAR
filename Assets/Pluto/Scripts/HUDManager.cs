@@ -622,6 +622,27 @@ public class HUDManager : MonoBehaviour
         }
     }
 
+    // Full-width card for the bonus scenario, kept visually apart from Missions 01-03.
+    public void AddBonusCard(MissionCard m)
+    {
+        var card = UIFactory.MakeRounded(m.Name, dialogCard, PlutoTheme.Raised.A(0.85f), PlutoTheme.CardRadius);
+        UIFactory.AddBorder(card.rectTransform, PlutoTheme.Amber.A(0.6f), PlutoTheme.CardRadius);
+        card.Height(150f);
+        var c = card.transform;
+        var text = UIFactory.MakeRect("Text", c);
+        text.Stretch();
+        text.offsetMin = new Vector2(28f, 18f);
+        text.offsetMax = new Vector2(-300f, -18f);
+        UIFactory.AddVerticalLayout(text.gameObject, 0, 0, PlutoTheme.S1 - 2f, TextAnchor.MiddleLeft);
+        UIFactory.MakeText("Number", text, m.Number, PlutoTheme.Caption, TextAnchor.UpperLeft, PlutoTheme.Amber).fontStyle = FontStyle.Bold;
+        UIFactory.MakeText("Name", text, m.Name + (m.Best > 0 ? $"   <size={PlutoTheme.Label}><color=#{PlutoTheme.HexOf(PlutoTheme.Mint)}>Best score  {m.Best}</color></size>" : ""),
+            PlutoTheme.Title - 4, TextAnchor.UpperLeft, PlutoTheme.Text).fontStyle = FontStyle.Bold;
+        UIFactory.MakeText("Description", text, m.Description, PlutoTheme.Label, TextAnchor.UpperLeft, PlutoTheme.TextSecondary);
+        var fly = UIFactory.MakeStyledButton("Fly", c, "FLY SCENARIO", ButtonStyle.Primary, m.Fly, PlutoTheme.Label);
+        fly.Rect.Place(new Vector2(1f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-28f, 0f), new Vector2(250f, 96f));
+        fly.Fill.raycastPadding = new Vector4(0f, -18f, 0f, -18f);
+    }
+
     // ---------- loop ----------
 
     void Update()

@@ -8,11 +8,11 @@ public static class ArenaBuilder
     static Material Mat(Color c, bool transparent) => PlutoGame.Instance.MakeMaterial(c, transparent);
 
     public static GameObject Primitive(PrimitiveType type, string name, Transform parent, Vector3 localPosition,
-        Vector3 scale, Color color, bool transparent)
+        Vector3 scale, Color color, bool transparent, bool keepCollider = false)
     {
         var go = GameObject.CreatePrimitive(type);
         go.name = name;
-        Object.Destroy(go.GetComponent<Collider>());
+        if (!keepCollider) Object.Destroy(go.GetComponent<Collider>());
         go.transform.SetParent(parent, false);
         go.transform.localPosition = localPosition;
         go.transform.localScale = scale;
