@@ -116,11 +116,22 @@ Best scores are saved on the phone.
 * Unity packages: AR Foundation, Google ARCore XR Plugin, Input System, glTFast, uGUI.
 * Everything else was written by the team: the UI, joysticks, placeholder drone, rings and pads.
 
-## Testing log (fill in during the hackathon)
+## Testing log
 
-| Device | Android | Test | Result |
+Test device: **Realme GT 7 (RMX5061)**, Android 16, MediaTek Dimensity (MT6989), Google Play Services for AR 1.57. Surface: wooden desk under indoor lighting. The editor test mode was also checked on a Windows 11 laptop in Unity 6000.6.7f1.
+
+| # | Build | Test | Result |
 |---|---|---|---|
-| | | Plane detection + placement | |
-| | | Tutorial 1–7 | |
-| | | Mission 1 / 2 / 3 | |
-| | | Tracking loss + recovery | |
+| 1 | v0.1 | App launch, camera permission, ARCore session start | ✅ Pass |
+| 2 | v0.1 | Plane detection on the wooden desk | ✅ Pass. Plane outline shown after slowly moving the phone |
+| 3 | v0.1 | Tap-to-place | ❌ Fail. Taps outside the exact detected polygon were ignored |
+| 4 | v1.0 | Tap-to-place with aiming ring + infinite-plane fallback | ✅ Pass. Fix for #3 |
+| 5 | v1.0 | Drone stays anchored while walking around the desk | ✅ Pass |
+| 6 | v1.0 | Joysticks: throttle, yaw, pitch, roll (both thumbs together) | ✅ Pass |
+| 7 | v1.0 | ARM / TAKE OFF / LAND buttons; disarm blocked in the air | ✅ Pass |
+| 8 | v1.0 | Guided tutorial stages 1–7 completed in order | ✅ Pass |
+| 9 | v1.0 | Mission 1: Takeoff & Landing | ✅ Pass |
+| 10 | v1.0 | Mission 2: Hover & Directional Control | ✅ Pass |
+| 11 | v1.0 | Mission 3: AR Navigation (rings + pillar crash) | ✅ Pass |
+| 12 | v1.0 | Editor test mode (keyboard flight on the laptop) | ✅ Pass |
+| 13 | v1.0 | Demo video recorded with scrcpy | ✅ Done |
