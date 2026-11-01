@@ -51,7 +51,7 @@ public class PlutoGame : MonoBehaviour
         Hud.Build(ui);
 
         Placement = gameObject.AddComponent<ARPlacementManager>();
-        ArenaBuilder.Pad(Arena, Vector3.zero, PadRadius, new Color(0.3f, 0.8f, 1f), "HomePad");
+        ArenaBuilder.Pad(Arena, Vector3.zero, PadRadius, PlutoTheme.Cyan, "HomePad");
 
         var droneGo = new GameObject("PlutoDrone");
         droneGo.transform.SetParent(Arena, false);
@@ -73,18 +73,25 @@ public class PlutoGame : MonoBehaviour
         Controls.ArmPressed += Drone.ToggleArm;
         Controls.TakeoffPressed += Drone.Takeoff;
         Controls.LandPressed += Drone.Land;
-        Drone.Warning += msg => Hud.Toast(msg, HUDManager.Warn);
+        Drone.Warning += msg => Hud.Notify(msg, NoticePriority.Action, PlutoTheme.Amber);
         Drone.Fsm.Changed += OnFlightStateChanged;
         Hud.MenuPressed += ShowMenu;
         Hud.ReplacePressed += RequestReplace;
+        Hud.HelpPressed += ShowHelp;
         Placement.Placed += OnPlaced;
         EnterScanning();
     }
 
     void Update()
     {
-        Hud.SetCenterMessage(Placement.StatusMessage);
-        if (Placement.IsPlaced && !Placement.Scanning) Hud.SetStatus(Drone);
+        bool scanning = Placement.Scanning;
+        var tracking = Placement.Tracking;
+        Hud.SetTracking(tracking, scanning);
+        bool aimCue = scanning && !Placement.ReticleVisible
+            && (tracking == TrackingQuality.Tracking || tracking == TrackingQuality.Limited);
+        Hud.SetScanning(scanning ? Placement.ScanTitle : null, Placement.ScanBody, Placement.ReticleVisible, aimCue);
+        Hud.SetTrackingNotice(Placement.TrackingNotice);
+        if (Placement.IsPlaced && !scanning) Hud.SetStatus(Drone);
     }
 
     // ---------- flow ----------
@@ -102,15 +109,17 @@ public class PlutoGame : MonoBehaviour
     void OnPlaced()
     {
         Hud.SetPlayingVisible(true);
+        Hud.Notify("Flight zone ready", NoticePriority.Objective, PlutoTheme.Mint);
         ShowMenu();
     }
 
     void RequestReplace()
     {
-        if (Drone.Fsm.IsAirborne) { Hud.Toast("Land the drone before re-placing it.", HUDManager.Warn); return; }
+        if (Drone.Fsm.IsAirborne) { Hud.Notify("Land Pluto before re-placing it.", NoticePriority.Action, PlutoTheme.Amber); return; }
         EnterScanning();
     }
 
+    // Welcome screen.
     public void ShowMenu()
     {
         StopModes();
@@ -119,23 +128,47 @@ public class PlutoGame : MonoBehaviour
         Controls.SetVisible(false);
 
         bool tutorialDone = PlayerPrefs.GetInt("tutorial_done", 0) == 1;
-        var items = new List<DialogButton>
-        {
-            new DialogButton("Guided Tutorial (7 stages)" + (tutorialDone ? "   - completed" : ""), new Color(0.15f, 0.6f, 0.3f), StartTutorial)
-        };
+        Hud.BeginDialog(860f);
+        Hud.AddEyebrow("PLUTO FLIGHT ACADEMY");
+        Hud.AddTitle("Your first flight starts here.");
+        Hud.AddBody("Learn the controls. Build confidence. Fly safely.");
+        if (tutorialDone) Hud.AddBody("Training completed", PlutoTheme.Mint).fontStyle = FontStyle.Bold;
+        Hud.AddSpacer(PlutoTheme.S1);
+        Hud.AddButtonRow(
+            new DialogButton("Start training", ButtonStyle.Primary, StartTutorial),
+            new DialogButton("Practice missions", ButtonStyle.Outline, ShowMissions));
+        Hud.AddSpacer(0f);
+        Hud.AddButtonRow(88f,
+            new DialogButton("Free flight", ButtonStyle.Ghost, StartFreeFlight),
+            new DialogButton($"Level: {DifficultyNames[Difficulty]}", ButtonStyle.Ghost, () => { SetDifficulty((Difficulty + 1) % 3); ShowMenu(); }),
+            new DialogButton($"Trail: {(trailOn ? "On" : "Off")}", ButtonStyle.Ghost, () => { trailOn = !trailOn; DroneVisual.ShowTrail = trailOn; ShowMenu(); }));
+    }
+
+    public void ShowMissions()
+    {
+        StopModes();
+        ResetDrone();
+        Drone.InputLocked = true;
+        Controls.SetVisible(false);
+
+        var cards = new List<MissionCard>();
         for (int i = 0; i < MissionManager.Names.Length; i++)
         {
             int m = i;
-            int best = MissionManager.Best(m);
-            items.Add(new DialogButton(MissionManager.Names[m] + (best > 0 ? $"   (best {best})" : ""), new Color(0.15f, 0.4f, 0.75f), () => StartMission(m)));
+            cards.Add(new MissionCard
+            {
+                Number = $"MISSION {m + 1:00}",
+                Name = MissionManager.ShortNames[m],
+                Description = MissionManager.Descriptions[m],
+                Best = MissionManager.Best(m),
+                Fly = () => StartMission(m)
+            });
         }
-        items.Add(new DialogButton("Free Flight", new Color(0.15f, 0.4f, 0.75f), StartFreeFlight));
-        items.Add(new DialogButton($"Difficulty: {DifficultyNames[Difficulty]}", HUDManager.Neutral, () => { SetDifficulty((Difficulty + 1) % 3); ShowMenu(); }));
-        items.Add(new DialogButton($"Flight path trail: {(trailOn ? "ON" : "OFF")}", HUDManager.Neutral, () => { trailOn = !trailOn; DroneVisual.ShowTrail = trailOn; ShowMenu(); }));
-
-        Hud.ShowDialog("PLUTO AR FLIGHT SCHOOL",
-            "Learn to fly the Pluto drone in your own room - zero crashes, zero broken propellers.\nNew pilot? Start with the Guided Tutorial.",
-            items);
+        Hud.BeginDialog(1320f);
+        Hud.AddEyebrow("PRACTICE MISSIONS");
+        Hud.AddTitle("Choose your challenge", PlutoTheme.Title + 4);
+        Hud.AddMissionCards(cards);
+        Hud.AddButtonRow(88f, new DialogButton("Back", ButtonStyle.Ghost, ShowMenu));
     }
 
     public void StartTutorial()
@@ -153,18 +186,49 @@ public class PlutoGame : MonoBehaviour
     public void StartFreeFlight()
     {
         BeginMode();
-        Hud.SetInstruction("FREE FLIGHT", "Practise anything you like. Press MENU when you are done.");
+        Hud.SetObjective("FREE FLIGHT", null, "Free flight", "Practise anything you like. Tap Menu when you are done.");
     }
 
-    public void ShowResult(string heading, string body, Action retry, Action next = null, string nextLabel = "Next")
+    public void ShowResult(ResultSpec result, Action retry, Action next = null, string nextLabel = "Next")
     {
         Drone.InputLocked = true;
         Controls.SetVisible(false);
-        var items = new List<DialogButton>();
-        if (next != null) items.Add(new DialogButton(nextLabel, new Color(0.15f, 0.6f, 0.3f), next));
-        items.Add(new DialogButton("Try again", new Color(0.15f, 0.4f, 0.75f), retry));
-        items.Add(new DialogButton("Main menu", HUDManager.Neutral, ShowMenu));
-        Hud.ShowDialog(heading, body, items);
+        Hud.ClearObjective();
+        Hud.BeginDialog(780f);
+        Hud.AddEyebrow(result.Eyebrow, result.Success ? PlutoTheme.Cyan : PlutoTheme.Coral);
+        if (result.Score.HasValue) Hud.AddScore(result.Score.Value);
+        var title = Hud.AddTitle(result.Title, PlutoTheme.Title + 6);
+        if (!result.Success) title.color = PlutoTheme.Coral;
+        foreach (var metric in result.Metrics) Hud.AddMetric(metric.Key, metric.Value);
+        if (!string.IsNullOrEmpty(result.Feedback)) Hud.AddFeedback(result.Feedback, result.Success ? PlutoTheme.Mint : PlutoTheme.Amber);
+        if (next != null) Hud.AddButtonRow(new DialogButton(nextLabel, ButtonStyle.Primary, next));
+        Hud.AddButtonRow(
+            new DialogButton("Retry", next == null ? ButtonStyle.Primary : ButtonStyle.Outline, retry),
+            new DialogButton("Missions", ButtonStyle.Dark, ShowMissions));
+    }
+
+    // Controls reference. The simulation pauses while it is open.
+    void ShowHelp()
+    {
+        if (Hud.DialogOpen) return;
+        Time.timeScale = 0f;
+        Hud.BeginDialog(1040f);
+        Hud.AddEyebrow("HOW TO FLY");
+        Hud.AddTitle("Controls", PlutoTheme.Title + 6);
+        Hud.AddMetric("Left stick up / down", "Climb / descend");
+        Hud.AddMetric("Left stick left / right", "Yaw: turn on the spot");
+        Hud.AddMetric("Right stick up / down", "Fly forward / backward");
+        Hud.AddMetric("Right stick left / right", "Slide left / right");
+        Hud.AddMetric("ARM / DISARM", "Start or stop motors (on the ground)");
+        Hud.AddMetric("TAKE OFF / LAND", "Automatic climb or descent");
+        Hud.AddFeedback("Let the left stick centre to hold height. The LEDs mark Pluto's nose.", PlutoTheme.Cyan);
+        Hud.AddButtonRow(new DialogButton("Back to flight", ButtonStyle.Primary, CloseHelp));
+    }
+
+    void CloseHelp()
+    {
+        Time.timeScale = 1f;
+        Hud.HideDialog();
     }
 
     void BeginMode()
@@ -178,24 +242,29 @@ public class PlutoGame : MonoBehaviour
 
     void StopModes()
     {
+        Time.timeScale = 1f;
         Tutorial.Stop();
         Missions.Stop();
-        Hud.SetInstruction(null, null);
+        Hud.ClearObjective();
         Hud.SetTimer("");
         Hud.SetAltitudeTarget(null);
     }
 
-    public void ResetDrone() => Drone.ResetTo(Vector3.zero, 0f);
+    public void ResetDrone()
+    {
+        Drone.ResetTo(Vector3.zero, 0f);
+        Controls.SetFlightState(Drone.State, Drone.Fsm.IsArmed);
+    }
 
     void OnFlightStateChanged(FlightState from, FlightState to)
     {
-        Controls.SetArmed(Drone.Fsm.IsArmed);
+        Controls.SetFlightState(to, Drone.Fsm.IsArmed);
         switch (to)
         {
-            case FlightState.Armed: Hud.Toast("ARMED - motors spinning", HUDManager.Good, 1.5f); break;
-            case FlightState.Disarmed when from != FlightState.Crashed: Hud.Toast("DISARMED - motors stopped", HUDManager.Info, 1.5f); break;
-            case FlightState.Landed: Hud.Toast("Touchdown", HUDManager.Info, 1.2f); break;
-            case FlightState.Crashed: Hud.Toast("CRASH!", HUDManager.Bad, 2f); break;
+            case FlightState.Armed: Hud.Notify("Armed. Motors spinning.", NoticePriority.Info, PlutoTheme.Amber, 1.5f); break;
+            case FlightState.Disarmed when from != FlightState.Crashed: Hud.Notify("Disarmed. Motors stopped.", NoticePriority.Info, PlutoTheme.Cyan, 1.5f); break;
+            case FlightState.Landed: Hud.Notify("Touchdown", NoticePriority.Info, PlutoTheme.Cyan, 1.2f); break;
+            case FlightState.Crashed: Hud.Notify("Crash", NoticePriority.Action, PlutoTheme.Coral, 2f); break;
         }
     }
 

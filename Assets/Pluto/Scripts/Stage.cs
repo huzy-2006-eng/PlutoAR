@@ -4,7 +4,8 @@ using UnityEngine;
 
 // One step of the tutorial or a mission. IsComplete is checked every frame and
 // must be driven by what the pilot actually does; Progress returns live
-// feedback / corrective prompts shown under the instruction.
+// feedback / corrective prompts shown under the instruction. Meter (0..1) and
+// MeterLabel are optional and must read the same real values IsComplete uses.
 public class Stage
 {
     public string Title;
@@ -13,6 +14,8 @@ public class Stage
     public Action OnExit;
     public Func<bool> IsComplete;
     public Func<string> Progress;
+    public Func<float> Meter;
+    public Func<string> MeterLabel;
 }
 
 public class StageRunner
@@ -102,13 +105,13 @@ public static class FlightHelpers
         float f = Vector3.Dot(delta, d.HeadingForward);
         float r = Vector3.Dot(delta, d.HeadingRight);
         var parts = new List<string>();
-        if (f > 0.07f) parts.Add("ahead (right stick UP)");
-        else if (f < -0.07f) parts.Add("behind (right stick DOWN)");
-        if (r > 0.07f) parts.Add("to the right (right stick RIGHT)");
-        else if (r < -0.07f) parts.Add("to the left (right stick LEFT)");
-        if (delta.y > 0.07f) parts.Add("higher (left stick UP)");
-        else if (delta.y < -0.07f) parts.Add("lower (left stick DOWN)");
-        return parts.Count == 0 ? "right here!" : string.Join(", ", parts) + $"  -  {delta.magnitude:0.00} m";
+        if (f > 0.07f) parts.Add("ahead (right stick up)");
+        else if (f < -0.07f) parts.Add("behind (right stick down)");
+        if (r > 0.07f) parts.Add("right (right stick right)");
+        else if (r < -0.07f) parts.Add("left (right stick left)");
+        if (delta.y > 0.07f) parts.Add("higher (left stick up)");
+        else if (delta.y < -0.07f) parts.Add("lower (left stick down)");
+        return parts.Count == 0 ? "right here" : string.Join(", ", parts) + $"  ·  {delta.magnitude:0.00} m";
     }
 
     // Corrective prompt for staying inside an axis-aligned box.
@@ -116,14 +119,14 @@ public static class FlightHelpers
     {
         var delta = d.Center - center;
         var half = size / 2f;
-        if (delta.y > half.y) return "Too high - push the LEFT stick DOWN a little.";
-        if (delta.y < -half.y) return "Too low - push the LEFT stick UP a little.";
+        if (delta.y > half.y) return "Too high. Ease the left stick down.";
+        if (delta.y < -half.y) return "Too low. Ease the left stick up.";
         float f = Vector3.Dot(delta, d.HeadingForward);
         float r = Vector3.Dot(delta, d.HeadingRight);
-        if (r > half.x) return "Drifting RIGHT - nudge the RIGHT stick LEFT.";
-        if (r < -half.x) return "Drifting LEFT - nudge the RIGHT stick RIGHT.";
-        if (f > half.z) return "Drifting FORWARD - nudge the RIGHT stick DOWN.";
-        if (f < -half.z) return "Drifting BACKWARD - nudge the RIGHT stick UP.";
+        if (r > half.x) return "Drifting right. Nudge the right stick left.";
+        if (r < -half.x) return "Drifting left. Nudge the right stick right.";
+        if (f > half.z) return "Drifting forward. Nudge the right stick down.";
+        if (f < -half.z) return "Drifting back. Nudge the right stick up.";
         return "Get back inside the box.";
     }
 
@@ -139,7 +142,7 @@ public static class FlightHelpers
         {
             var row = new List<string>();
             for (int j = i; j < Mathf.Min(i + perLine, names.Length); j++)
-                row.Add(done[j] ? Colored($"[OK] {names[j]}", HUDManager.Good) : $"[  ] {names[j]}");
+                row.Add(done[j] ? Colored(names[j], PlutoTheme.Mint) : Colored(names[j], PlutoTheme.TextMuted));
             lines.Add(string.Join("      ", row));
         }
         return string.Join("\n", lines);
@@ -149,15 +152,20 @@ public static class FlightHelpers
 
     public static string Colored(string s, Color c) => $"<color=#{ColorUtility.ToHtmlStringRGB(c)}>{s}</color>";
 
-    public static string Warn(string s) => Colored(s, HUDManager.Warn);
+    public static string Warn(string s) => Colored(s, PlutoTheme.Amber);
+
+    public static string Good(string s) => Colored(s, PlutoTheme.Mint);
 }
 
 // Shared plumbing for the tutorial and the missions.
 public abstract class GuidedMode : MonoBehaviour
 {
+    const float UiInterval = 0.1f;
+
     protected PlutoGame game;
     protected readonly StageRunner runner = new StageRunner();
     readonly List<GameObject> spawned = new List<GameObject>();
+    float nextUi;
 
     protected DroneController Drone => game.Drone;
     protected HUDManager Hud => game.Hud;
@@ -171,10 +179,10 @@ public abstract class GuidedMode : MonoBehaviour
         game = g;
         runner.StageStarted += (i, s) =>
         {
-            Hud.SetInstruction($"{Label}  -  STEP {i + 1}/{runner.Count}: {s.Title}", s.Instruction);
-            Hud.SetProgress(null);
+            Hud.SetObjective(Label, $"{i + 1:00} / {runner.Count:00}", s.Title, s.Instruction);
+            nextUi = 0f;
         };
-        runner.StageCompleted += (i, s) => Hud.Toast($"Step {i + 1} complete!", HUDManager.Good, 1.5f);
+        runner.StageCompleted += (i, s) => nextUi = 0f;
         runner.AllCompleted += OnAllCompleted;
     }
 
@@ -214,8 +222,17 @@ public abstract class GuidedMode : MonoBehaviour
         if (!runner.Running) return;
         runner.Tick(Time.deltaTime);
         if (!runner.Running) return;
+
+        // Completion is checked every frame above; the card only needs ~10 Hz.
+        if (Time.unscaledTime < nextUi) return;
+        nextUi = Time.unscaledTime + UiInterval;
         var s = runner.Current;
-        Hud.SetProgress(runner.IsAdvancing ? FlightHelpers.Colored("Well done!", HUDManager.Good) : s?.Progress?.Invoke());
-        Hud.SetTimer(FlightHelpers.FormatTime(runner.TotalTime));
+        if (s == null) return;
+        bool done = runner.IsAdvancing;
+        Hud.SetObjectiveComplete(done);
+        Hud.SetObjectiveDetail(done ? FlightHelpers.Good("Step complete. Nice flying.") : s.Progress?.Invoke());
+        if (s.Meter != null) Hud.SetObjectiveMeter(done ? 1f : s.Meter(), s.MeterLabel?.Invoke());
+        else Hud.SetObjectiveMeter(null, null);
+        Hud.SetTimer("TIME   " + FlightHelpers.FormatTime(runner.TotalTime));
     }
 }

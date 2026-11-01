@@ -61,9 +61,11 @@ public static class ArenaBuilder
         var root = new GameObject(name).transform;
         root.SetParent(parent, false);
         root.localPosition = localPosition;
+        // Dark disc + coloured rim for contrast on any table colour.
         Primitive(PrimitiveType.Cylinder, "Disc", root, new Vector3(0f, 0.001f, 0f), new Vector3(radius * 2f, 0.0008f, radius * 2f),
-            new Color(color.r, color.g, color.b, 0.45f), true);
+            PlutoTheme.Deep.A(0.55f), true);
         Circle(root, new Vector3(0f, 0.003f, 0f), Quaternion.identity, radius, color, 0.006f, true);
+        Circle(root, new Vector3(0f, 0.003f, 0f), Quaternion.identity, radius * 0.8f, color.A(0.6f), 0.002f, true);
         // "H" helipad marking
         Primitive(PrimitiveType.Cube, "H1", root, new Vector3(-radius * 0.35f, 0.003f, 0f), new Vector3(radius * 0.12f, 0.001f, radius * 0.9f), Color.white, false);
         Primitive(PrimitiveType.Cube, "H2", root, new Vector3(radius * 0.35f, 0.003f, 0f), new Vector3(radius * 0.12f, 0.001f, radius * 0.9f), Color.white, false);

@@ -12,7 +12,7 @@ An Android AR app that lets beginners learn to fly the **Pluto** drone safely. A
 * **State machine:** Disarmed → Armed → Taking off → Flying ⇄ Landing → Landed → Disarmed (+ Crashed). Invalid actions are blocked, for example disarming in the air.
 * **7-stage guided tutorial:** every stage is completed by a real pilot action and gives corrective prompts as you fly.
 * **3 scored missions:** Takeoff & Landing, Hover & Directional Control, and the AR Navigation Challenge (rings + pillars).
-* **HUD:** flight state, altitude, vertical speed, ground speed, an altitude bar with target marker, the instruction panel, live hints, warnings, a timer, and best scores.
+* **HUD ("Pluto Flight Academy" design):** brand header with a live tracking pill, Help and Menu; an objective card with step count, live hints and a progress meter driven by the real stage checks; a telemetry card (altitude, flight state, vertical speed, ground speed, timer, altitude bar with target marker); one prioritised warning area; scanning guidance with an aiming cue; and welcome, mission-select and results screens that show only measured values. Colours, spacing and rounded shapes come from `PlutoTheme.cs`, and every touch target is at least 48 dp.
 * **Extras:** difficulty levels (wind + speed), a flight-path trail, keyboard and gamepad support, and a laptop test mode in the Unity Editor.
 
 ## Tech stack
@@ -91,7 +91,7 @@ Best scores are saved on the phone.
 | `FlightStateMachine.cs` | flight states and allowed transitions |
 | `DroneVisual.cs` | model loading/scaling, propellers, tilt, LEDs, shadow, trail |
 | `ControllerUI.cs`, `VirtualJoystick.cs` | virtual Pluto controller |
-| `HUDManager.cs`, `UIFactory.cs` | HUD, toasts, dialogs |
+| `HUDManager.cs`, `UIFactory.cs`, `PlutoTheme.cs` | cockpit HUD, warning area, dialog screens, design tokens and generated rounded sprites |
 | `Stage.cs` | stage runner + shared helpers (`GuidedMode`) |
 | `TutorialManager.cs`, `MissionManager.cs` | tutorial and missions |
 | `ArenaBuilder.cs`, `Checkpoint.cs` | pads, zones, waypoints, pillars, rings |

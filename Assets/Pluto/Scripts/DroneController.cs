@@ -68,12 +68,12 @@ public class DroneController : MonoBehaviour
     public void Disarm()
     {
         if (Fsm.IsOnGroundArmed) Fsm.TryTransition(FlightState.Disarmed);
-        else if (Fsm.IsAirborne) Warn("Land first! Disarming in the air makes a real drone fall.");
+        else if (Fsm.IsAirborne) Warn("Land first. Disarming in the air would make a real drone fall.");
     }
 
     public void Takeoff()
     {
-        if (State == FlightState.Disarmed) { Warn("Arm the drone first (press ARM)."); return; }
+        if (State == FlightState.Disarmed) { Warn("Arm Pluto first: tap ARM."); return; }
         if (!Fsm.IsOnGroundArmed) return;
         autoTakeoff = true;
         Fsm.TryTransition(FlightState.TakingOff);
@@ -113,7 +113,7 @@ public class DroneController : MonoBehaviour
             case FlightState.Disarmed:
                 velocity = Vector3.zero;
                 if (Input.Magnitude > 0.5f && !SuppressDisarmedWarning && !InputLocked)
-                    Warn("Drone is DISARMED - press ARM to start the motors.");
+                    Warn("Pluto is disarmed. Tap ARM to start the motors.");
                 break;
 
             case FlightState.Armed:
@@ -185,7 +185,7 @@ public class DroneController : MonoBehaviour
                 float impact = velocity.y;
                 velocity = Vector3.zero;
                 Fsm.TryTransition(FlightState.Landed);
-                if (impact < -hardLandingSpeed) Warn("Hard landing! Lower the throttle more gently.");
+                if (impact < -hardLandingSpeed) Warn("Hard landing. Ease the left stick down more gently.");
                 Touchdown?.Invoke(impact, p);
             }
             else if (velocity.y < 0f)
@@ -198,7 +198,7 @@ public class DroneController : MonoBehaviour
         {
             p.y = maxAltitude;
             velocity.y = Mathf.Min(0f, velocity.y);
-            Warn("Maximum altitude reached.");
+            Warn("Maximum training altitude reached.");
         }
 
         var flat = new Vector2(p.x, p.z);
@@ -207,7 +207,7 @@ public class DroneController : MonoBehaviour
             flat = flat.normalized * maxRange;
             p.x = flat.x;
             p.z = flat.y;
-            Warn("Too far from the landing pad - fly back!");
+            Warn("Too far from the home pad. Fly back.");
         }
 
         transform.localPosition = p;

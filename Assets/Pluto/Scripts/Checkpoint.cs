@@ -35,9 +35,10 @@ public class Checkpoint : MonoBehaviour
     public void SetState(RingState state)
     {
         State = state;
-        Color c = state == RingState.Active ? new Color(1f, 0.85f, 0.1f, 1f)
-            : state == RingState.Passed ? new Color(0.3f, 1f, 0.5f, 0.5f)
-            : new Color(1f, 1f, 1f, 0.45f);
+        // Bright cyan = next, dimmed white = later, mint = cleared.
+        Color c = state == RingState.Active ? PlutoTheme.Cyan
+            : state == RingState.Passed ? PlutoTheme.Mint.A(0.55f)
+            : new Color(1f, 1f, 1f, 0.25f);
         line.startColor = c;
         line.endColor = c;
         line.widthMultiplier = 0.012f;

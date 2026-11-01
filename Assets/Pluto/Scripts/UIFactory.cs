@@ -2,36 +2,17 @@ using System;
 using UnityEngine;
 using UnityEngine.UI;
 
+public enum ButtonStyle { Primary, Outline, Dark, Danger, Ghost }
+
 // Small helpers to build the whole UI from code, so nobody has to wire up
-// Canvas objects by hand in the Inspector.
+// Canvas objects by hand in the Inspector. Visual values come from PlutoTheme.
 public static class UIFactory
 {
     static Font font;
-    static Sprite circle;
 
     public static Font Font => font != null ? font : (font = Resources.GetBuiltinResource<Font>("LegacyRuntime.ttf"));
 
-    public static Sprite Circle
-    {
-        get
-        {
-            if (circle != null) return circle;
-            const int size = 128;
-            var tex = new Texture2D(size, size, TextureFormat.RGBA32, false) { wrapMode = TextureWrapMode.Clamp };
-            float r = size / 2f;
-            var pixels = new Color32[size * size];
-            for (int y = 0; y < size; y++)
-                for (int x = 0; x < size; x++)
-                {
-                    float d = Vector2.Distance(new Vector2(x + 0.5f, y + 0.5f), new Vector2(r, r));
-                    pixels[y * size + x] = new Color32(255, 255, 255, (byte)(Mathf.Clamp01(r - d) * 255));
-                }
-            tex.SetPixels32(pixels);
-            tex.Apply();
-            circle = Sprite.Create(tex, new Rect(0, 0, size, size), new Vector2(0.5f, 0.5f), 100);
-            return circle;
-        }
-    }
+    public static Sprite Circle => PlutoTheme.Circle;
 
     public static RectTransform MakeRect(string name, Transform parent)
     {
@@ -46,6 +27,37 @@ public static class UIFactory
         img.color = color;
         img.sprite = sprite;
         return img;
+    }
+
+    // Decorative rounded shape (no raycasts).
+    public static Image MakeRounded(string name, Transform parent, Color color, float radius, bool outline = false)
+    {
+        var img = MakeImage(name, parent, color, outline ? PlutoTheme.RoundedOutline : PlutoTheme.RoundedFill);
+        img.type = Image.Type.Sliced;
+        img.pixelsPerUnitMultiplier = PlutoTheme.SliceMultiplier(radius);
+        img.raycastTarget = false;
+        return img;
+    }
+
+    // Rounded card: translucent navy fill, thin border, soft drop shadow.
+    public static Image MakePanel(string name, Transform parent, float radius = PlutoTheme.CardRadius,
+        float alpha = PlutoTheme.PanelAlpha, bool raycast = false)
+    {
+        var panel = MakeRounded(name, parent, PlutoTheme.Surface.A(alpha), radius);
+        panel.raycastTarget = raycast;
+        var shadow = panel.gameObject.AddComponent<Shadow>();
+        shadow.effectColor = new Color(0f, 0f, 0f, 0.35f);
+        shadow.effectDistance = new Vector2(0f, -4f);
+        AddBorder(panel.rectTransform, PlutoTheme.Border, radius);
+        return panel;
+    }
+
+    public static Image AddBorder(RectTransform target, Color color, float radius)
+    {
+        var border = MakeRounded("Border", target, color, radius, true);
+        border.rectTransform.Stretch();
+        border.gameObject.AddComponent<LayoutElement>().ignoreLayout = true;
+        return border;
     }
 
     public static Text MakeText(string name, Transform parent, string text, int size, TextAnchor anchor, Color color)
@@ -75,6 +87,44 @@ public static class UIFactory
         return button;
     }
 
+    public static StyledButton MakeStyledButton(string name, Transform parent, string label, ButtonStyle style, Action onClick, int fontSize = PlutoTheme.Label)
+    {
+        var fill = MakeImage(name, parent, Color.white, PlutoTheme.RoundedFill);
+        fill.type = Image.Type.Sliced;
+        fill.pixelsPerUnitMultiplier = PlutoTheme.SliceMultiplier(PlutoTheme.ButtonRadius);
+        var button = fill.gameObject.AddComponent<Button>();
+        button.targetGraphic = fill;
+        var colors = button.colors;
+        colors.normalColor = Color.white;
+        colors.highlightedColor = Color.white;
+        colors.selectedColor = Color.white;
+        colors.pressedColor = new Color(0.75f, 0.8f, 0.85f, 1f);
+        colors.fadeDuration = 0.06f;
+        button.colors = colors;
+        button.navigation = new Navigation { mode = Navigation.Mode.None };
+        button.onClick.AddListener(() => onClick?.Invoke());
+
+        var border = AddBorder(fill.rectTransform, Color.white, PlutoTheme.ButtonRadius);
+        var text = MakeText("Label", fill.transform, label, fontSize, TextAnchor.MiddleCenter, Color.white);
+        text.fontStyle = FontStyle.Bold;
+        text.rectTransform.Stretch(12f, 0f);
+        text.horizontalOverflow = HorizontalWrapMode.Overflow;
+        var group = fill.gameObject.AddComponent<CanvasGroup>();
+
+        var styled = new StyledButton(button, fill, border, text, group);
+        styled.SetStyle(style);
+        return styled;
+    }
+
+    // Grow the touch area of a small control without changing how it looks.
+    public static void ExpandTouchArea(Graphic graphic, float minHeight = PlutoTheme.TouchHeight, float minWidth = 0f)
+    {
+        var size = graphic.rectTransform.sizeDelta;
+        float padY = Mathf.Max(0f, (minHeight - size.y) / 2f);
+        float padX = Mathf.Max(0f, (minWidth - size.x) / 2f);
+        graphic.raycastPadding = new Vector4(-padX, -padY, -padX, -padY);
+    }
+
     public static RectTransform Place(this RectTransform rt, Vector2 anchor, Vector2 pivot, Vector2 position, Vector2 size)
     {
         rt.anchorMin = anchor;
@@ -95,6 +145,88 @@ public static class UIFactory
     }
 
     public static Text Label(this Button button) => button.GetComponentInChildren<Text>();
+
+    public static VerticalLayoutGroup AddVerticalLayout(GameObject go, int padH, int padV, float spacing, TextAnchor align = TextAnchor.UpperLeft)
+    {
+        var layout = go.AddComponent<VerticalLayoutGroup>();
+        layout.padding = new RectOffset(padH, padH, padV, padV);
+        layout.spacing = spacing;
+        layout.childAlignment = align;
+        layout.childControlWidth = true;
+        layout.childControlHeight = true;
+        layout.childForceExpandWidth = true;
+        layout.childForceExpandHeight = false;
+        return layout;
+    }
+
+    public static LayoutElement Height(this Component c, float preferred)
+    {
+        var le = c.gameObject.GetComponent<LayoutElement>();
+        if (le == null) le = c.gameObject.AddComponent<LayoutElement>();
+        le.preferredHeight = preferred;
+        le.minHeight = preferred;
+        return le;
+    }
+}
+
+// A themed button with style + availability states. Unavailable buttons stay
+// clickable so the existing flight logic can explain why the action is refused.
+public class StyledButton
+{
+    public readonly Button Button;
+    public readonly Image Fill;
+    public readonly Image Border;
+    public readonly Text Text;
+    readonly CanvasGroup group;
+
+    public RectTransform Rect => (RectTransform)Button.transform;
+    public ButtonStyle Style { get; private set; }
+
+    public StyledButton(Button button, Image fill, Image border, Text text, CanvasGroup group)
+    {
+        Button = button;
+        Fill = fill;
+        Border = border;
+        Text = text;
+        this.group = group;
+    }
+
+    public void SetLabel(string label) => Text.text = label;
+
+    public void SetStyle(ButtonStyle style)
+    {
+        Style = style;
+        switch (style)
+        {
+            case ButtonStyle.Primary:
+                Fill.color = PlutoTheme.Cyan;
+                Border.color = PlutoTheme.Cyan;
+                Text.color = PlutoTheme.Deep;
+                break;
+            case ButtonStyle.Outline:
+                Fill.color = PlutoTheme.Deep.A(0.72f);
+                Border.color = PlutoTheme.Cyan;
+                Text.color = PlutoTheme.Cyan;
+                break;
+            case ButtonStyle.Danger:
+                Fill.color = PlutoTheme.Deep.A(0.72f);
+                Border.color = PlutoTheme.Coral;
+                Text.color = PlutoTheme.Coral;
+                break;
+            case ButtonStyle.Ghost:
+                Fill.color = PlutoTheme.Deep.A(0.4f);
+                Border.color = PlutoTheme.Border;
+                Text.color = PlutoTheme.TextSecondary;
+                break;
+            default:
+                Fill.color = PlutoTheme.Surface.A(PlutoTheme.PanelAlpha);
+                Border.color = PlutoTheme.Border;
+                Text.color = PlutoTheme.Text;
+                break;
+        }
+    }
+
+    public void SetAvailable(bool available) => group.alpha = available ? 1f : 0.42f;
 }
 
 // Keeps UI out of phone notches / rounded corners.

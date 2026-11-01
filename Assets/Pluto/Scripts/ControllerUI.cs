@@ -1,4 +1,5 @@
 using System;
+using System.Collections.Generic;
 using UnityEngine;
 using UnityEngine.UI;
 
@@ -15,36 +16,58 @@ public struct FlightInput
 //   Buttons     : ARM/DISARM, TAKE OFF, LAND
 public class ControllerUI : MonoBehaviour
 {
+    const float StickRadius = 150f;
+    const float ButtonWidth = 200f;
+    const float ButtonHeight = 96f;
+    static readonly Color LabelBright = PlutoTheme.Text.A(0.95f);
+    static readonly Color LabelDim = PlutoTheme.TextSecondary.A(0.45f);
+
     public VirtualJoystick Left { get; private set; }
     public VirtualJoystick Right { get; private set; }
-    public Button ArmButton { get; private set; }
-    public Button TakeoffButton { get; private set; }
-    public Button LandButton { get; private set; }
+    public Button ArmButton => arm.Button;
+    public Button TakeoffButton => takeoff.Button;
+    public Button LandButton => land.Button;
+    public bool Visible => root.activeSelf;
 
     public event Action ArmPressed, TakeoffPressed, LandPressed;
 
     GameObject root;
+    StyledButton arm, takeoff, land;
+    readonly List<Text> stickLabels = new List<Text>();
     Component highlighted;
 
     public void Build(RectTransform parent)
     {
         root = UIFactory.MakeRect("Controller", parent).Stretch().gameObject;
-        const float r = 165f;
-        Left = MakeStick("LeftStick", new Vector2(0f, 0f), new Vector2(70f, 90f), r, "UP", "DOWN", "YAW L", "YAW R", "THROTTLE / YAW");
-        Right = MakeStick("RightStick", new Vector2(1f, 0f), new Vector2(-70f, 90f), r, "FWD", "BACK", "LEFT", "RIGHT", "PITCH / ROLL");
+        Left = MakeStick("LeftStick", new Vector2(0f, 0f), new Vector2(120f, 80f), "CLIMB", "DESCEND", "YAW\nLEFT", "YAW\nRIGHT");
+        Right = MakeStick("RightStick", new Vector2(1f, 0f), new Vector2(-120f, 80f), "FORWARD", "BACKWARD", "LEFT", "RIGHT");
 
-        ArmButton = MakeButton("ARM", -250f, HUDManager.Good, () => ArmPressed?.Invoke());
-        TakeoffButton = MakeButton("TAKE OFF", 0f, new Color(0.15f, 0.45f, 0.85f, 0.9f), () => TakeoffPressed?.Invoke());
-        LandButton = MakeButton("LAND", 250f, new Color(0.85f, 0.55f, 0.1f, 0.9f), () => LandPressed?.Invoke());
-        SetArmed(false);
+        float step = ButtonWidth + PlutoTheme.S3;
+        arm = MakeButton("ARM", -step, ButtonStyle.Outline, () => ArmPressed?.Invoke());
+        takeoff = MakeButton("↑ TAKE OFF", 0f, ButtonStyle.Primary, () => TakeoffPressed?.Invoke());
+        land = MakeButton("↓ LAND", step, ButtonStyle.Dark, () => LandPressed?.Invoke());
+        SetFlightState(FlightState.Disarmed, false);
+        SetLabelsProminent(false);
     }
 
     public void SetVisible(bool visible) => root.SetActive(visible);
 
-    public void SetArmed(bool armed)
+    // Button labels / availability follow the real flight state. Unavailable
+    // buttons stay tappable so the drone can explain why the action is refused.
+    public void SetFlightState(FlightState state, bool armed)
     {
-        ArmButton.Label().text = armed ? "DISARM" : "ARM";
-        ArmButton.targetGraphic.color = armed ? new Color(0.85f, 0.2f, 0.2f, 0.9f) : new Color(0.15f, 0.65f, 0.3f, 0.9f);
+        bool airborne = state == FlightState.TakingOff || state == FlightState.Flying || state == FlightState.Landing;
+        arm.SetLabel(armed ? "DISARM" : "ARM");
+        arm.SetStyle(armed ? ButtonStyle.Danger : ButtonStyle.Outline);
+        arm.SetAvailable(!airborne && state != FlightState.Crashed);
+        takeoff.SetAvailable(armed && !airborne && state != FlightState.Crashed);
+        land.SetAvailable(state == FlightState.Flying || state == FlightState.TakingOff);
+    }
+
+    // Full-strength stick labels while learning the controls, dimmed afterwards.
+    public void SetLabelsProminent(bool prominent)
+    {
+        foreach (var t in stickLabels) t.color = prominent ? LabelBright : LabelDim;
     }
 
     // Pulses a control so the tutorial can point at it. Pass null to clear.
@@ -73,32 +96,33 @@ public class ControllerUI : MonoBehaviour
         if (InputHelper.LandKeyDown()) LandPressed?.Invoke();
     }
 
-    VirtualJoystick MakeStick(string name, Vector2 corner, Vector2 offset, float r,
-        string up, string down, string left, string right, string caption)
+    VirtualJoystick MakeStick(string name, Vector2 corner, Vector2 offset, string up, string down, string left, string right)
     {
-        var js = VirtualJoystick.Create(name, root.transform, r);
+        var js = VirtualJoystick.Create(name, root.transform, StickRadius);
         var rt = (RectTransform)js.transform;
-        rt.Place(corner, corner, offset, Vector2.one * r * 2f);
+        rt.Place(corner, corner, offset, Vector2.one * StickRadius * 2f);
 
-        AddLabel(rt, up, new Vector2(0.5f, 1f), new Vector2(0f, -26f));
-        AddLabel(rt, down, new Vector2(0.5f, 0f), new Vector2(0f, 26f));
-        AddLabel(rt, left, new Vector2(0f, 0.5f), new Vector2(46f, 0f));
-        AddLabel(rt, right, new Vector2(1f, 0.5f), new Vector2(-46f, 0f));
-        var cap = UIFactory.MakeText("Caption", rt, caption, 24, TextAnchor.MiddleCenter, new Color(1f, 1f, 1f, 0.9f));
-        cap.rectTransform.Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 1f), new Vector2(0f, -6f), new Vector2(r * 2.4f, 36f));
+        AddLabel(rt, up, new Vector2(0.5f, 1f), new Vector2(0.5f, 0f), new Vector2(0f, 8f), new Vector2(200f, 30f), TextAnchor.LowerCenter);
+        AddLabel(rt, down, new Vector2(0.5f, 0f), new Vector2(0.5f, 1f), new Vector2(0f, -8f), new Vector2(200f, 30f), TextAnchor.UpperCenter);
+        AddLabel(rt, left, new Vector2(0f, 0.5f), new Vector2(1f, 0.5f), new Vector2(-12f, 0f), new Vector2(96f, 60f), TextAnchor.MiddleRight);
+        AddLabel(rt, right, new Vector2(1f, 0.5f), new Vector2(0f, 0.5f), new Vector2(12f, 0f), new Vector2(96f, 60f), TextAnchor.MiddleLeft);
         return js;
     }
 
-    static void AddLabel(RectTransform parent, string text, Vector2 anchor, Vector2 position)
+    void AddLabel(RectTransform parent, string text, Vector2 anchor, Vector2 pivot, Vector2 position, Vector2 size, TextAnchor align)
     {
-        var t = UIFactory.MakeText(text, parent, text, 20, TextAnchor.MiddleCenter, new Color(1f, 1f, 1f, 0.7f));
-        t.rectTransform.Place(anchor, new Vector2(0.5f, 0.5f), position, new Vector2(110f, 30f));
+        var t = UIFactory.MakeText(text, parent, text, PlutoTheme.Caption, align, LabelDim);
+        t.fontStyle = FontStyle.Bold;
+        t.lineSpacing = 0.9f;
+        t.rectTransform.Place(anchor, pivot, position, size);
+        stickLabels.Add(t);
     }
 
-    Button MakeButton(string label, float x, Color color, Action onClick)
+    StyledButton MakeButton(string label, float x, ButtonStyle style, Action onClick)
     {
-        var b = UIFactory.MakeButton(label, root.transform, label, color, onClick, 32);
-        ((RectTransform)b.transform).Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(x, 40f), new Vector2(220f, 100f));
+        var b = UIFactory.MakeStyledButton(label, root.transform, label, style, onClick, PlutoTheme.Label + 2);
+        b.Rect.Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(x, 48f), new Vector2(ButtonWidth, ButtonHeight));
+        UIFactory.ExpandTouchArea(b.Fill);
         return b;
     }
 }

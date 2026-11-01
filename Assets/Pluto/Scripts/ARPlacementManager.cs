@@ -12,13 +12,20 @@ using UnityEngine.XR.ARSubsystems;
 //
 // In the Unity Editor (no AR camera) it falls back to a grey floor you click on,
 // so the flight / tutorial code can be tested with Play mode on a laptop.
+public enum TrackingQuality { Editor, Starting, Unsupported, Limited, Tracking }
+
 [DefaultExecutionOrder(-50)]
 public class ARPlacementManager : MonoBehaviour
 {
     public Transform Arena { get; private set; }
     public bool IsPlaced { get; private set; }
     public bool Scanning { get; private set; }
-    public string StatusMessage { get; private set; }
+    public TrackingQuality Tracking { get; private set; }
+    public string ScanTitle { get; private set; }
+    public string ScanBody { get; private set; }
+    public string TrackingNotice { get; private set; }
+    public bool ReticleVisible => reticleValid;
+    public bool ReticleConfident { get; private set; }
     public bool UseEditorFallback => Application.isEditor;
 
     public event Action Placed;
@@ -35,7 +42,9 @@ public class ARPlacementManager : MonoBehaviour
     Transform anchor;
     Transform reticle;
     bool reticleValid;
+    bool reticleColoredConfident;
     Pose reticlePose;
+    LineRenderer reticleRing;
 
     void Awake()
     {
@@ -87,13 +96,13 @@ public class ARPlacementManager : MonoBehaviour
         if (anchor != null) Arena.SetPositionAndRotation(anchor.position, anchor.rotation);
         SetPlanesVisible(Scanning);
         UpdateReticle();
-        StatusMessage = ComputeStatus();
+        ComputeStatus();
 
         if (!Scanning) return;
         if (!InputHelper.TryGetTapDown(out var screenPos) || IsOverUI(screenPos)) return;
 
         // Tap point first; if it misses, use the ring in the middle of the screen.
-        if (TryHitSurface(screenPos, out var pose)) PlaceAt(pose);
+        if (TryHitSurface(screenPos, out var pose, out _)) PlaceAt(pose);
         else if (reticleValid) PlaceAt(reticlePose);
     }
 
@@ -102,18 +111,30 @@ public class ARPlacementManager : MonoBehaviour
         if (reticle == null)
         {
             reticle = new GameObject("PlacementReticle").transform;
-            ArenaBuilder.Circle(reticle, new Vector3(0f, 0.002f, 0f), Quaternion.identity, 0.1f, new Color(0.3f, 0.9f, 1f, 0.9f), 0.006f, true);
+            reticleRing = ArenaBuilder.Circle(reticle, new Vector3(0f, 0.002f, 0f), Quaternion.identity, 0.1f, PlutoTheme.Mint, 0.006f, true);
             ArenaBuilder.Circle(reticle, new Vector3(0f, 0.002f, 0f), Quaternion.identity, 0.015f, new Color(1f, 1f, 1f, 0.9f), 0.006f, true);
+            reticleColoredConfident = true;
         }
+        bool confident = false;
         reticleValid = Scanning && cam != null
-            && TryHitSurface(new Vector2(Screen.width / 2f, Screen.height / 2f), out reticlePose);
+            && TryHitSurface(new Vector2(Screen.width / 2f, Screen.height / 2f), out reticlePose, out confident);
+        ReticleConfident = reticleValid && confident;
         reticle.gameObject.SetActive(reticleValid);
-        if (reticleValid) reticle.SetPositionAndRotation(reticlePose.position, Quaternion.identity);
+        if (!reticleValid) return;
+        reticle.SetPositionAndRotation(reticlePose.position, Quaternion.identity);
+        // Mint on a measured surface, amber on an estimated one.
+        if (reticleColoredConfident != ReticleConfident)
+        {
+            reticleColoredConfident = ReticleConfident;
+            reticleRing.startColor = reticleRing.endColor = ReticleConfident ? PlutoTheme.Mint : PlutoTheme.Amber;
+        }
     }
 
-    bool TryHitSurface(Vector2 screenPos, out Pose pose)
+    // confident = the hit is inside a measured plane, not an estimate / fallback.
+    bool TryHitSurface(Vector2 screenPos, out Pose pose, out bool confident)
     {
         pose = default;
+        confident = false;
         if (cam == null) return false;
         var ray = cam.ScreenPointToRay(screenPos);
 
@@ -121,12 +142,14 @@ public class ARPlacementManager : MonoBehaviour
         {
             if (!Physics.Raycast(ray, out var hit, 20f)) return false;
             pose = new Pose(hit.point, Quaternion.identity);
+            confident = true;
             return true;
         }
 
         if (raycaster != null && raycaster.Raycast(screenPos, Hits, PlaneHits))
         {
             pose = Hits[0].pose;
+            confident = (Hits[0].hitType & TrackableType.PlaneWithinPolygon) != 0;
             return true;
         }
 
@@ -184,42 +207,76 @@ public class ARPlacementManager : MonoBehaviour
         }
     }
 
-    string ComputeStatus()
+    void ComputeStatus()
     {
+        TrackingNotice = null;
         if (UseEditorFallback)
-            return Scanning ? "EDITOR TEST MODE: click the grey floor to place the drone" : null;
+        {
+            Tracking = TrackingQuality.Editor;
+            SetScan(Scanning ? "Editor test mode" : null, "Click the grey floor to place Pluto.");
+            return;
+        }
 
         switch (ARSession.state)
         {
             case ARSessionState.Unsupported:
-                return "This phone does not support ARCore. Use a phone from Google's ARCore supported devices list.";
+                Tracking = TrackingQuality.Unsupported;
+                SetScan("AR is not available", "This phone does not support ARCore. Use a phone from Google's ARCore supported devices list.");
+                return;
             case ARSessionState.NeedsInstall:
             case ARSessionState.Installing:
-                return "Installing Google Play Services for AR...";
+                Tracking = TrackingQuality.Starting;
+                SetScan("Installing AR services", "Google Play Services for AR is being installed.");
+                return;
             case ARSessionState.None:
             case ARSessionState.CheckingAvailability:
             case ARSessionState.Ready:
-                return "Starting the camera...";
+                Tracking = TrackingQuality.Starting;
+                SetScan("Starting the camera", "Hold on while AR starts.");
+                return;
             case ARSessionState.SessionInitializing:
-                return (IsPlaced ? "Tracking lost: " : "") + TrackingAdvice();
+                Tracking = TrackingQuality.Limited;
+                if (IsPlaced && !Scanning) TrackingNotice = LostNotice();
+                SetScan(Scanning ? "Find your flight zone" : null, TrackingAdvice());
+                return;
         }
 
-        if (!Scanning) return null;
-        if (reticleValid) return "Aim the blue ring where you want the drone, then tap the screen";
-        return planes != null && planes.trackables.count > 0
-            ? "Surface found - point the phone at it until the blue ring appears"
-            : "Slowly move your phone over a table or the floor to find a surface";
+        Tracking = TrackingQuality.Tracking;
+        if (!Scanning) SetScan(null, null);
+        else if (reticleValid) SetScan("Tap to place Pluto", ReticleConfident
+            ? "The ring shows where Pluto will sit. Tap anywhere to place it."
+            : "Surface still settling. Tap to place, or keep scanning for a steadier ring.");
+        else if (planes != null && planes.trackables.count > 0) SetScan("Find your flight zone", "Surface found. Point the centre of the screen at it.");
+        else SetScan("Find your flight zone", "Move your phone slowly over a textured table or floor.");
+    }
+
+    void SetScan(string title, string body)
+    {
+        ScanTitle = title;
+        ScanBody = body;
     }
 
     static string TrackingAdvice()
     {
         switch (ARSession.notTrackingReason)
         {
-            case NotTrackingReason.InsufficientLight: return "too dark - add more light.";
-            case NotTrackingReason.InsufficientFeatures: return "point at a textured surface (not plain white or glossy).";
-            case NotTrackingReason.ExcessiveMotion: return "move the phone more slowly.";
-            case NotTrackingReason.Relocalizing: return "hold still, finding the table again...";
-            default: return "slowly move your phone around.";
+            case NotTrackingReason.InsufficientLight: return "Too dark. Add more light.";
+            case NotTrackingReason.InsufficientFeatures: return "Point at a textured surface, not plain white or glossy.";
+            case NotTrackingReason.ExcessiveMotion: return "Move the phone more slowly.";
+            case NotTrackingReason.Relocalizing: return "Hold still while the table is found again.";
+            default: return "Move your phone slowly over a textured table or floor.";
+        }
+    }
+
+    static string LostNotice()
+    {
+        switch (ARSession.notTrackingReason)
+        {
+            case NotTrackingReason.InsufficientLight: return "Tracking lost. Add more light.";
+            case NotTrackingReason.InsufficientFeatures: return "Tracking lost. Point at a textured surface.";
+            case NotTrackingReason.ExcessiveMotion: return "Tracking lost. Move your phone slowly.";
+            case NotTrackingReason.Relocalizing: return "Tracking lost. Hold still to find the table again.";
+            default: return "Tracking lost. Move your phone slowly.";
         }
     }
 }

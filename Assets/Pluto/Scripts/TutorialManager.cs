@@ -6,7 +6,10 @@ using UnityEngine;
 // actually performs the action, and gives live corrective prompts meanwhile.
 public class TutorialManager : GuidedMode
 {
-    protected override string Label => "TUTORIAL";
+    static readonly Color ZoneIdle = PlutoTheme.Cyan.A(0.2f);
+    static readonly Color ZoneInside = PlutoTheme.Mint.A(0.25f);
+
+    protected override string Label => "TRAINING";
 
     public void Begin()
     {
@@ -17,28 +20,48 @@ public class TutorialManager : GuidedMode
     protected override void OnAllCompleted()
     {
         float t = runner.TotalTime;
+        int count = runner.Count;
         Stop();
         PlayerPrefs.SetInt("tutorial_done", 1);
         PlayerPrefs.Save();
-        game.ShowResult("TUTORIAL COMPLETE!",
-            $"You finished all 7 stages in {FlightHelpers.FormatTime(t)}.\nYou can now arm, take off, hover, move in every direction, navigate and land.\nReady for the missions?",
-            game.StartTutorial, () => game.StartMission(0), "Start Mission 1");
+        var result = new ResultSpec
+        {
+            Eyebrow = "TRAINING",
+            Title = "Training complete",
+            Feedback = "You can now arm, take off, hover, move in every direction, navigate and land."
+        }
+            .Metric("Time", FlightHelpers.FormatTime(t))
+            .Metric("Stages completed", $"{count} / {count}");
+        game.ShowResult(result, game.StartTutorial, () => game.StartMission(0), "START " + MissionManager.ShortNames[0]);
+    }
+
+    static int Count(bool[] done)
+    {
+        int n = 0;
+        foreach (var d in done) if (d) n++;
+        return n;
     }
 
     // 1. Familiarisation: move each stick in each direction once.
     Stage Familiarise()
     {
-        var names = new[] { "Left UP (throttle +)", "Left DOWN (throttle -)", "Left LEFT (yaw left)", "Left RIGHT (yaw right)",
-                            "Right UP (pitch fwd)", "Right DOWN (pitch back)", "Right LEFT (roll left)", "Right RIGHT (roll right)" };
         var done = new bool[8];
+        string Arrow(int i, string glyph) => done[i] ? FlightHelpers.Good(glyph) : FlightHelpers.Colored(glyph, PlutoTheme.TextMuted);
         return new Stage
         {
             Title = "Meet the controller",
-            Instruction = "LEFT stick: up/down = THROTTLE (height), left/right = YAW (turn on the spot).\n"
-                + "RIGHT stick: up/down = PITCH (forward/back), left/right = ROLL (slide sideways).\n"
-                + "Push each stick in all 4 directions. The drone is disarmed, so it will not move yet.",
-            OnEnter = () => { Array.Clear(done, 0, done.Length); Drone.SuppressDisarmedWarning = true; },
-            OnExit = () => Drone.SuppressDisarmedWarning = false,
+            Instruction = "Push each stick in all four directions. Pluto stays still until it is armed.",
+            OnEnter = () =>
+            {
+                Array.Clear(done, 0, done.Length);
+                Drone.SuppressDisarmedWarning = true;
+                game.Controls.SetLabelsProminent(true);
+            },
+            OnExit = () =>
+            {
+                Drone.SuppressDisarmedWarning = false;
+                game.Controls.SetLabelsProminent(false);
+            },
             IsComplete = () =>
             {
                 var i = game.Controls.Read();
@@ -49,7 +72,10 @@ public class TutorialManager : GuidedMode
                 done[6] |= i.roll < -t; done[7] |= i.roll > t;
                 return Array.TrueForAll(done, d => d);
             },
-            Progress = () => FlightHelpers.Checklist(names, done)
+            Progress = () => $"Left   {Arrow(0, "↑")} {Arrow(1, "↓")} {Arrow(2, "←")} {Arrow(3, "→")}"
+                + $"      Right   {Arrow(4, "↑")} {Arrow(5, "↓")} {Arrow(6, "←")} {Arrow(7, "→")}",
+            Meter = () => Count(done) / 8f,
+            MeterLabel = () => $"{Count(done)} / 8 moves"
         };
     }
 
@@ -57,29 +83,30 @@ public class TutorialManager : GuidedMode
     Stage Arming() => new Stage
     {
         Title = "Arm the motors",
-        Instruction = "Press ARM. The propellers start spinning but the drone stays on the ground.\nSafety rule: only arm on a flat surface with your hands clear of the propellers.",
+        Instruction = "Tap ARM to start the propellers. Keep your hands clear of a real drone when you do this.",
         OnEnter = () => game.Controls.Highlight(game.Controls.ArmButton),
         OnExit = () => game.Controls.Highlight(null),
         IsComplete = () => Drone.Fsm.IsArmed,
         Progress = () => game.Controls.Read().Magnitude > 0.5f
-            ? FlightHelpers.Warn("The sticks do nothing until the drone is armed - press ARM.")
-            : "Waiting for ARM..."
+            ? FlightHelpers.Warn("The sticks do nothing until Pluto is armed. Tap ARM.")
+            : "Waiting for ARM."
     };
 
     // 3. Takeoff: reach 0.5 m (+/-0.1) and hold it for 2 s.
     Stage Takeoff()
     {
         const float target = 0.5f;
+        const float hold = 2f;
         float held = 0f;
         LineRenderer ring = null;
         return new Stage
         {
             Title = "Take off",
-            Instruction = "Gently push the LEFT stick UP to climb. Reach the green ring at 0.5 m and hold the height for 2 seconds.\n(Let the stick go back to the centre to hover.)",
+            Instruction = "Push the left stick up, then hold Pluto level with the green ring at 0.5 m for 2 seconds.",
             OnEnter = () =>
             {
                 held = 0f;
-                ring = Spawn(ArenaBuilder.Circle(Arena, new Vector3(0f, target, 0f), Quaternion.identity, 0.15f, HUDManager.Good, 0.01f, true));
+                ring = Spawn(ArenaBuilder.Circle(Arena, new Vector3(0f, target, 0f), Quaternion.identity, 0.15f, PlutoTheme.Mint, 0.01f, true));
                 Hud.SetAltitudeTarget(target);
             },
             OnExit = () => { if (ring != null) Destroy(ring.gameObject); Hud.SetAltitudeTarget(null); },
@@ -87,15 +114,17 @@ public class TutorialManager : GuidedMode
             {
                 bool ok = Drone.Fsm.IsAirborne && Mathf.Abs(Drone.Altitude - target) <= 0.1f;
                 held = ok ? held + Time.deltaTime : 0f;
-                return held >= 2f;
+                return held >= hold;
             },
             Progress = () =>
             {
-                if (!Drone.Fsm.IsArmed) return FlightHelpers.Warn("The drone was disarmed - press ARM again.");
-                if (Drone.Altitude < target - 0.1f) return $"Altitude {Drone.Altitude:0.00} m - climb more: LEFT stick UP.";
-                if (Drone.Altitude > target + 0.1f) return FlightHelpers.Warn($"Altitude {Drone.Altitude:0.00} m - too high: LEFT stick DOWN a little.");
-                return FlightHelpers.Colored($"Holding... {held:0.0} / 2.0 s", HUDManager.Good);
-            }
+                if (!Drone.Fsm.IsArmed) return FlightHelpers.Warn("Pluto was disarmed. Tap ARM again.");
+                if (Drone.Altitude < target - 0.1f) return "Climb more: left stick up.";
+                if (Drone.Altitude > target + 0.1f) return FlightHelpers.Warn("Too high. Ease the left stick down.");
+                return FlightHelpers.Good("In the band. Hold steady.");
+            },
+            Meter = () => held / hold,
+            MeterLabel = () => $"{held:0.0} / {hold:0.0} s"
         };
     }
 
@@ -104,16 +133,17 @@ public class TutorialManager : GuidedMode
     {
         var center = new Vector3(0f, 0.5f, 0f);
         var size = new Vector3(0.4f, 0.3f, 0.4f);
+        const float hold = 5f;
         float held = 0f;
         Renderer zone = null;
         return new Stage
         {
             Title = "Hover",
-            Instruction = "Keep the drone inside the blue box for 5 seconds.\nUse tiny stick movements - a real drone drifts, so keep correcting.",
+            Instruction = "Keep Pluto inside the glowing box for 5 seconds using tiny stick moves.",
             OnEnter = () =>
             {
                 held = 0f;
-                zone = Spawn(ArenaBuilder.Zone(Arena, center, size, new Color(0.3f, 0.6f, 1f, 0.22f)));
+                zone = Spawn(ArenaBuilder.Zone(Arena, center, size, ZoneIdle));
                 Hud.SetAltitudeTarget(center.y);
             },
             OnExit = () => { if (zone != null) Destroy(zone.gameObject); Hud.SetAltitudeTarget(null); },
@@ -121,16 +151,16 @@ public class TutorialManager : GuidedMode
             {
                 bool inside = Drone.Fsm.IsAirborne && FlightHelpers.InBox(Drone.Center, center, size);
                 held = inside ? held + Time.deltaTime : 0f;
-                zone.sharedMaterial = game.MakeMaterial(inside ? new Color(0.3f, 1f, 0.5f, 0.25f) : new Color(0.3f, 0.6f, 1f, 0.22f), true);
-                return held >= 5f;
+                zone.sharedMaterial = game.MakeMaterial(inside ? ZoneInside : ZoneIdle, true);
+                return held >= hold;
             },
             Progress = () =>
             {
-                if (!Drone.Fsm.IsAirborne) return FlightHelpers.Warn("Take off first: ARM, then LEFT stick UP.");
-                return held > 0f
-                    ? FlightHelpers.Colored($"Steady... {held:0.0} / 5.0 s", HUDManager.Good)
-                    : FlightHelpers.Warn(FlightHelpers.BoxHint(Drone, center, size));
-            }
+                if (!Drone.Fsm.IsAirborne) return FlightHelpers.Warn("Take off first: ARM, then left stick up.");
+                return held > 0f ? FlightHelpers.Good("Inside the box. Stay steady.") : FlightHelpers.Warn(FlightHelpers.BoxHint(Drone, center, size));
+            },
+            Meter = () => held / hold,
+            MeterLabel = () => $"{held:0.0} / {hold:0.0} s"
         };
     }
 
@@ -144,7 +174,7 @@ public class TutorialManager : GuidedMode
         return new Stage
         {
             Title = "Move in every direction",
-            Instruction = "With the RIGHT stick, fly about 30 cm FORWARD, BACK, LEFT and RIGHT.\nForward/back is PITCH, left/right is ROLL - both relative to where the drone's nose (red LEDs) points.",
+            Instruction = "Use the right stick to fly about 30 cm forward, back, left and right of where the nose points.",
             OnEnter = () => { Array.Clear(distance, 0, 4); Array.Clear(done, 0, 4); },
             IsComplete = () =>
             {
@@ -163,12 +193,19 @@ public class TutorialManager : GuidedMode
             Progress = () =>
             {
                 var labels = new string[4];
-                for (int k = 0; k < 4; k++) labels[k] = $"{names[k]} {Mathf.Min(distance[k], goal) * 100f:0}/{goal * 100f:0} cm";
+                for (int k = 0; k < 4; k++) labels[k] = $"{names[k]} {Mathf.Min(distance[k], goal) * 100f:0}";
                 string list = FlightHelpers.Checklist(labels, done, 4);
                 if (!Drone.Fsm.IsAirborne) return FlightHelpers.Warn("Take off first.") + "\n" + list;
-                if (Drone.Altitude < 0.15f) return FlightHelpers.Warn("Very low - climb a little so you don't clip the table.") + "\n" + list;
+                if (Drone.Altitude < 0.15f) return FlightHelpers.Warn("Very low. Climb a little first.") + "\n" + list;
                 return list;
-            }
+            },
+            Meter = () =>
+            {
+                float sum = 0f;
+                for (int k = 0; k < 4; k++) sum += Mathf.Min(distance[k], goal);
+                return sum / (4f * goal);
+            },
+            MeterLabel = () => $"{Count(done)} / 4 directions"
         };
     }
 
@@ -179,7 +216,7 @@ public class TutorialManager : GuidedMode
         return new Stage
         {
             Title = "Navigate the rings",
-            Instruction = "Fly through the 3 rings in order. The flashing yellow ring is the next one.\nTip: use YAW (left stick left/right) to point the nose at the ring, then PITCH forward.",
+            Instruction = "Fly through the 3 rings in order. The bright ring is next; yaw to face it, then fly forward.",
             OnEnter = () =>
             {
                 course.Rings.Clear();
@@ -191,15 +228,18 @@ public class TutorialManager : GuidedMode
             OnExit = () => { foreach (var r in course.Rings) if (r != null) Destroy(r.gameObject); course.Rings.Clear(); },
             IsComplete = () =>
             {
-                if (course.Step(Drone.Center) && !course.Done) Hud.Toast($"Ring {course.Next} passed!", HUDManager.Good, 1.2f);
+                if (course.Step(Drone.Center) && !course.Done)
+                    Hud.Notify($"Ring {course.Next} cleared", NoticePriority.Objective, PlutoTheme.Mint, 1.2f);
                 return course.Done;
             },
             Progress = () =>
             {
                 if (!Drone.Fsm.IsAirborne) return FlightHelpers.Warn("Take off first.");
                 var ring = course.Current;
-                return ring == null ? "" : $"Ring {course.Next + 1}/3 is " + FlightHelpers.Direction(Drone, ring.transform.localPosition);
-            }
+                return ring == null ? "" : "Next ring: " + FlightHelpers.Direction(Drone, ring.transform.localPosition);
+            },
+            Meter = () => course.Next / (float)Mathf.Max(1, course.Rings.Count),
+            MeterLabel = () => $"{course.Next} / {course.Rings.Count} rings"
         };
     }
 
@@ -216,7 +256,7 @@ public class TutorialManager : GuidedMode
         return new Stage
         {
             Title = "Land and disarm",
-            Instruction = "Fly back over the blue landing pad. Pull the LEFT stick DOWN gently (or press LAND) to touch down softly on it.\nThen press DISARM to stop the motors.",
+            Instruction = "Land softly on the home pad with the left stick or LAND, then tap DISARM.",
             OnEnter = () => { touched = onPad = soft = false; Drone.Touchdown += onTouchdown; },
             OnExit = () => { Drone.Touchdown -= onTouchdown; game.Controls.Highlight(null); },
             IsComplete = () => touched && onPad && soft && Drone.State == FlightState.Disarmed,
@@ -225,18 +265,19 @@ public class TutorialManager : GuidedMode
                 if (Drone.Fsm.IsAirborne)
                 {
                     game.Controls.Highlight(null);
-                    return "Landing pad is " + FlightHelpers.Direction(Drone, Vector3.zero, true)
-                        + (FlightHelpers.OnPad(Drone.LocalPosition, Vector3.zero, PlutoGame.PadRadius) ? "\n" + FlightHelpers.Colored("Over the pad - now descend slowly.", HUDManager.Good) : "");
+                    return FlightHelpers.OnPad(Drone.LocalPosition, Vector3.zero, PlutoGame.PadRadius)
+                        ? FlightHelpers.Good("Over the pad. Descend slowly.")
+                        : "Home pad: " + FlightHelpers.Direction(Drone, Vector3.zero, true);
                 }
-                if (touched && !onPad) return FlightHelpers.Warn("You landed off the pad. Take off again (LEFT stick UP) and land on the blue pad.");
-                if (touched && !soft) return FlightHelpers.Warn("That landing was too hard. Take off and come down more slowly.");
+                if (touched && !onPad) return FlightHelpers.Warn("Landed off the pad. Take off again and land on the home pad.");
+                if (touched && !soft) return FlightHelpers.Warn("Too hard. Take off and come down more slowly.");
                 if (touched && Drone.Fsm.IsOnGroundArmed)
                 {
                     game.Controls.Highlight(game.Controls.ArmButton);
-                    return FlightHelpers.Colored("Perfect landing! Now press DISARM.", HUDManager.Good);
+                    return FlightHelpers.Good("Perfect landing. Now tap DISARM.");
                 }
-                if (Drone.State == FlightState.Disarmed) return FlightHelpers.Warn("Press ARM and take off, then land on the pad.");
-                return "Take off, then land on the pad.";
+                if (Drone.State == FlightState.Disarmed) return FlightHelpers.Warn("Tap ARM and take off, then land on the pad.");
+                return "Take off, then land on the home pad.";
             }
         };
     }
