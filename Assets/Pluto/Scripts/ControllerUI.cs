@@ -32,7 +32,8 @@ public class ControllerUI : MonoBehaviour
     public event Action ArmPressed, TakeoffPressed, LandPressed;
 
     GameObject root;
-    StyledButton arm, takeoff, land;
+    StyledButton arm, takeoff, land, context;
+    Action contextAction;
     readonly List<Text> stickLabels = new List<Text>();
     Component highlighted;
 
@@ -48,9 +49,26 @@ public class ControllerUI : MonoBehaviour
         land = MakeButton("↓ LAND", step, ButtonStyle.Dark, () => LandPressed?.Invoke());
         SetFlightState(FlightState.Disarmed, false);
         SetLabelsProminent(false);
+
+        // Mission-specific action (e.g. RELEASE PACKAGE), above the flight buttons.
+        context = UIFactory.MakeStyledButton("ContextButton", root.transform, "", ButtonStyle.Primary, () => contextAction?.Invoke(), PlutoTheme.Label + 2);
+        context.Rect.Place(new Vector2(0.5f, 0f), new Vector2(0.5f, 0f), new Vector2(0f, 48f + ButtonHeight + 44f), new Vector2(380f, 88f));
+        UIFactory.ExpandTouchArea(context.Fill);
+        SetContextAction(null, null);
     }
 
     public void SetVisible(bool visible) => root.SetActive(visible);
+
+    // Pass a null label to hide the contextual button.
+    public void SetContextAction(string label, Action onClick)
+    {
+        contextAction = onClick;
+        bool show = !string.IsNullOrEmpty(label);
+        context.Rect.gameObject.SetActive(show);
+        if (show) context.SetLabel(label);
+    }
+
+    public void SetContextAvailable(bool available) => context.SetAvailable(available);
 
     // Button labels / availability follow the real flight state. Unavailable
     // buttons stay tappable so the drone can explain why the action is refused.

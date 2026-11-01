@@ -6,11 +6,11 @@ using UnityEngine;
 // floodwater, and rescue rooftop B with a survivor marker. Every objective is
 // completed from real flight telemetry; nothing flies or moves the drone.
 //
-//   Arm -> Take off -> Navigate to B -> Hold over B -> Return to A and land -> Disarm
+//   Arm -> Take off -> Navigate to B -> Hold over B -> Deliver package -> Return to A and land -> Disarm
 public class RescueMission : GuidedMode
 {
     public const string Name = "PLUTO RESCUE";
-    public const string Description = "Flood response drill: fly to the stranded survivor's rooftop, hold position over it, then return home.";
+    public const string Description = "Flood response drill: reach the stranded survivor's rooftop, drop a medical package on target, then return home.";
     const string BestKey = "best_rescue";
 
     // Layout (arena-local metres). Building B is the rescue rooftop.
@@ -25,6 +25,17 @@ public class RescueMission : GuidedMode
     const float HoldSeconds = 3f;
     const float TakeoffHeight = 0.4f;
 
+    // Medical delivery. Heights are measured above rooftop B's surface, not the table.
+    public static readonly float RoofTop = BuildingBSize.y + 0.008f;
+    public static readonly Vector3 DropSpot = BuildingB + new Vector3(-0.07f, 0f, -0.07f);
+    public const float DropSpotRadius = 0.07f;
+    public const float ReleaseMinHeight = 0.08f, ReleaseMaxHeight = 0.25f;
+    public const float ReleaseMaxHorizontalSpeed = 0.12f, ReleaseMaxVerticalSpeed = 0.1f;
+    const float OverSpotTolerance = 0.06f;
+    const float PackageSize = 0.03f;
+    const float PackageHang = -0.014f;
+    const float ReloadDelay = 1.5f;
+
     static readonly Color Concrete = new Color(0.42f, 0.47f, 0.55f);
     static readonly Color RoofGrey = new Color(0.58f, 0.62f, 0.69f);
     static readonly Color Water = new Color(0.16f, 0.45f, 0.72f, 0.55f);
@@ -33,6 +44,13 @@ public class RescueMission : GuidedMode
 
     readonly List<Bounds> obstacles = new List<Bounds>();
     bool hardLanding, lastTouchOnPad;
+
+    // delivery state (all reset in Begin / Stop)
+    Transform attachedPackage;
+    DeliveryPackage droppedPackage;
+    bool delivered;
+    int deliveryAttempts;
+    float reloadAt = -1f;
 
     protected override string Label => "BONUS  ·  " + Name;
 
@@ -46,10 +64,12 @@ public class RescueMission : GuidedMode
         Stop();
         hardLanding = false;
         lastTouchOnPad = false;
+        ResetDelivery();
         BuildEnvironment();
+        AttachPackage();
         Drone.Touchdown += OnTouchdown;
         Drone.Crashed += OnCrashed;
-        runner.Start(new List<Stage> { ArmStage(), TakeoffStage(), NavigateStage(), HoldStage(), ReturnStage(), DisarmStage() });
+        runner.Start(new List<Stage> { ArmStage(), TakeoffStage(), NavigateStage(), HoldStage(), DeliverStage(), ReturnStage(), DisarmStage() });
     }
 
     public override void Stop()
@@ -60,12 +80,26 @@ public class RescueMission : GuidedMode
             Drone.Crashed -= OnCrashed;
         }
         obstacles.Clear();
-        base.Stop();
+        base.Stop(); // destroys every spawned object, including packages
+        ResetDelivery();
+        if (game != null) game.Controls.SetContextAction(null, null);
+    }
+
+    void ResetDelivery()
+    {
+        attachedPackage = null;
+        droppedPackage = null;
+        delivered = false;
+        deliveryAttempts = 0;
+        reloadAt = -1f;
     }
 
     protected override void Update()
     {
         base.Update();
+        // Keep the hanging package above the surface while Pluto sits on the pad.
+        if (attachedPackage != null)
+            attachedPackage.localPosition = new Vector3(0f, Mathf.Max(PackageHang, PackageSize / 2f - Drone.Altitude), 0f);
         if (!runner.Running || Paused || !Drone.Fsm.IsAirborne || Drone.State == FlightState.Crashed) return;
         foreach (var b in obstacles)
         {
@@ -114,10 +148,12 @@ public class RescueMission : GuidedMode
             Title = newBest ? "New best score" : "Rescue complete",
             Score = score,
             Feedback = hardLanding ? "Ease the left stick down more slowly for a softer touchdown."
-                : "Survivor located and Pluto home safely. Now try for a faster time."
+                : deliveryAttempts > 1 ? "Settle lower and slower over the amber target before you release."
+                : "Survivor reached, supplies delivered and Pluto home safely. Now try for a faster time."
         }
             .Metric("Time", FlightHelpers.FormatTime(t))
             .Metric("Rooftop hold", $"{HoldSeconds:0} s completed")
+            .Metric("Package delivered", deliveryAttempts == 1 ? "First attempt" : $"Attempt {deliveryAttempts}")
             .Metric("Buildings hit", "0")
             .Metric("Hard landing", hardLanding ? "Yes" : "No");
         if (!newBest) result.Metric("Best score", previousBest.ToString());
@@ -136,13 +172,13 @@ public class RescueMission : GuidedMode
         // Dry rescue base under home pad A, meeting the water's edge so pad and map
         // read as one surface. Kept below the pad disc (bottom at 0.6 mm) to avoid z-fighting.
         ArenaBuilder.Primitive(PrimitiveType.Cube, "RescueBase", root, new Vector3(0f, 0.0002f, 0.025f),
-            new Vector3(1.6f, 0.0004f, 0.65f), BaseGround, false);
+            new Vector3(1.6f, 0.0004f, 0.65f), BaseGround, false, true);
         ArenaBuilder.Primitive(PrimitiveType.Cube, "Shoreline", root, new Vector3(0f, 0.0015f, 0.35f),
             new Vector3(1.6f, 0.003f, 0.012f), RoofGrey, false);
 
         // Floodwater: one thin translucent slab plus a few ripple rings (cheap).
         ArenaBuilder.Primitive(PrimitiveType.Cube, "Floodwater", root, new Vector3(0f, 0.003f, 1.0f),
-            new Vector3(1.6f, 0.004f, 1.3f), Water, true);
+            new Vector3(1.6f, 0.004f, 1.3f), Water, true, true);
         ArenaBuilder.Circle(root, new Vector3(0.05f, 0.007f, 0.95f), Quaternion.identity, 0.12f, Color.white.A(0.25f), 0.003f, true);
         ArenaBuilder.Circle(root, new Vector3(-0.3f, 0.007f, 0.45f), Quaternion.identity, 0.08f, Color.white.A(0.2f), 0.003f, true);
         ArenaBuilder.Circle(root, new Vector3(0.55f, 0.007f, 0.7f), Quaternion.identity, 0.1f, Color.white.A(0.2f), 0.003f, true);
@@ -160,6 +196,12 @@ public class RescueMission : GuidedMode
         ArenaBuilder.Primitive(PrimitiveType.Sphere, "Head", survivor, new Vector3(0f, 0.072f, 0f), Vector3.one * 0.026f, new Color(1f, 0.85f, 0.7f), false);
         ArenaBuilder.Circle(survivor, new Vector3(0f, 0.004f, 0f), Quaternion.identity, 0.04f, PlutoTheme.Amber, 0.004f, true);
         Beam(root, BuildingB + new Vector3(0f, roof, 0f), 0.75f, PlutoTheme.Cyan);
+
+        // Delivery target beside the survivor (on the roof cap's top surface).
+        var spot = DropSpot + Vector3.up * (RoofTop + 0.001f);
+        ArenaBuilder.Primitive(PrimitiveType.Cylinder, "DropSpot", root, spot, new Vector3(DropSpotRadius * 2f, 0.0005f, DropSpotRadius * 2f),
+            PlutoTheme.Amber.A(0.3f), true);
+        ArenaBuilder.Circle(root, spot + Vector3.up * 0.001f, Quaternion.identity, DropSpotRadius, PlutoTheme.Amber, 0.004f, true);
     }
 
     void AddBuilding(Transform root, string name, Vector3 basePos, Vector3 size)
@@ -168,7 +210,7 @@ public class RescueMission : GuidedMode
         ArenaBuilder.Primitive(PrimitiveType.Cube, name, root, center, size, Concrete, false, true);
         // Roof cap and a dark window band so the blocks read as buildings.
         ArenaBuilder.Primitive(PrimitiveType.Cube, name + "Roof", root, basePos + Vector3.up * (size.y + 0.004f),
-            new Vector3(size.x + 0.01f, 0.008f, size.z + 0.01f), RoofGrey, false);
+            new Vector3(size.x + 0.01f, 0.008f, size.z + 0.01f), RoofGrey, false, true);
         ArenaBuilder.Primitive(PrimitiveType.Cube, name + "Windows", root, basePos + Vector3.up * (size.y * 0.62f),
             new Vector3(size.x + 0.004f, size.y * 0.12f, size.z + 0.004f), new Color(0.12f, 0.16f, 0.22f), false);
         obstacles.Add(new Bounds(center, size));
@@ -252,6 +294,122 @@ public class RescueMission : GuidedMode
         };
     }
 
+    // ---------- delivery ----------
+
+    void AttachPackage()
+    {
+        var box = Spawn(ArenaBuilder.Primitive(PrimitiveType.Cube, "MedicalPackage", Drone.transform,
+            new Vector3(0f, PackageHang, 0f), Vector3.one * PackageSize, Color.white, false));
+        // Red cross on top (decorative children, no colliders).
+        ArenaBuilder.Primitive(PrimitiveType.Cube, "CrossA", box.transform, new Vector3(0f, 0.51f, 0f), new Vector3(0.7f, 0.04f, 0.22f), PlutoTheme.Coral, false);
+        ArenaBuilder.Primitive(PrimitiveType.Cube, "CrossB", box.transform, new Vector3(0f, 0.51f, 0f), new Vector3(0.22f, 0.04f, 0.7f), PlutoTheme.Coral, false);
+        attachedPackage = box.transform;
+    }
+
+    float HeightAboveRoof => Drone.Altitude - RoofTop;
+    float HorizontalSpeed => new Vector2(Drone.Velocity.x, Drone.Velocity.z).magnitude;
+    bool OverSpot => Vector2.Distance(new Vector2(Drone.LocalPosition.x, Drone.LocalPosition.z), new Vector2(DropSpot.x, DropSpot.z)) <= OverSpotTolerance;
+    bool HeightOk => HeightAboveRoof >= ReleaseMinHeight && HeightAboveRoof <= ReleaseMaxHeight;
+    bool SpeedOk => HorizontalSpeed <= ReleaseMaxHorizontalSpeed && Mathf.Abs(Drone.Velocity.y) <= ReleaseMaxVerticalSpeed;
+    bool CanRelease => attachedPackage != null && droppedPackage == null && !delivered && !Paused
+        && Drone.Fsm.IsAirborne && OverSpot && HeightOk && SpeedOk;
+
+    string ReleaseBlocker()
+    {
+        if (Paused) return "Wait for tracking to return.";
+        if (!Drone.Fsm.IsAirborne) return "Take off first.";
+        if (!OverSpot) return "Move over the amber target first.";
+        if (HeightAboveRoof < ReleaseMinHeight) return "Too low over the roof. Climb a little.";
+        if (HeightAboveRoof > ReleaseMaxHeight) return "Too high. Descend closer to the roof.";
+        if (!SpeedOk) return "Slow down and hold steady before releasing.";
+        return null;
+    }
+
+    void OnReleasePressed()
+    {
+        if (!CanRelease)
+        {
+            var reason = ReleaseBlocker();
+            if (reason != null) Hud.Notify(reason, NoticePriority.Action, PlutoTheme.Amber);
+            return;
+        }
+        deliveryAttempts++;
+        var box = attachedPackage;
+        attachedPackage = null;
+        box.SetParent(Arena, true);
+        box.gameObject.AddComponent<BoxCollider>();
+        var body = box.gameObject.AddComponent<Rigidbody>();
+        body.mass = 0.05f;
+        body.interpolation = RigidbodyInterpolation.Interpolate;
+        body.collisionDetectionMode = CollisionDetectionMode.ContinuousDynamic;
+        body.linearVelocity = Arena.TransformDirection(Drone.Velocity);
+        droppedPackage = box.gameObject.AddComponent<DeliveryPackage>();
+        droppedPackage.Init(body, Arena.position.y - 0.3f);
+        game.Controls.SetContextAvailable(false);
+    }
+
+    // Judged once per package, after it settles or is lost.
+    void EvaluateDrop()
+    {
+        if (droppedPackage == null || !droppedPackage.Done || droppedPackage.Judged) return;
+        droppedPackage.Judged = true;
+        var local = Arena.InverseTransformPoint(droppedPackage.transform.position);
+        bool onRoof = !droppedPackage.Lost && Mathf.Abs(local.y - (RoofTop + PackageSize / 2f)) <= 0.03f;
+        bool onTarget = onRoof && Vector2.Distance(new Vector2(local.x, local.z), new Vector2(DropSpot.x, DropSpot.z)) <= DropSpotRadius;
+        if (onTarget)
+        {
+            delivered = true;
+            Hud.Notify("Package delivered to the survivor", NoticePriority.Objective, PlutoTheme.Mint, 2f);
+            return;
+        }
+        Hud.Notify(droppedPackage.Lost ? "Missed delivery. The package fell off the map." : "Missed delivery. It landed off the amber target.",
+            NoticePriority.Action, PlutoTheme.Coral, 2.5f);
+        reloadAt = runner.StageTime + ReloadDelay;
+    }
+
+    void ReloadIfDue()
+    {
+        if (reloadAt < 0f || runner.StageTime < reloadAt) return;
+        reloadAt = -1f;
+        if (droppedPackage != null) Destroy(droppedPackage.gameObject);
+        droppedPackage = null;
+        AttachPackage();
+        Hud.Notify("New package loaded. Try again.", NoticePriority.Info, PlutoTheme.Cyan, 2f);
+    }
+
+    Stage DeliverStage() => new Stage
+    {
+        Title = "Deliver the medical package",
+        Instruction = $"Hover {ReleaseMinHeight * 100f:0}-{ReleaseMaxHeight * 100f:0} cm above the amber target on the roof, hold steady, then tap RELEASE PACKAGE.",
+        OnEnter = () =>
+        {
+            game.Controls.SetContextAction("RELEASE PACKAGE", OnReleasePressed);
+            Hud.SetAltitudeTarget(RoofTop + (ReleaseMinHeight + ReleaseMaxHeight) / 2f);
+        },
+        OnExit = () =>
+        {
+            game.Controls.SetContextAction(null, null);
+            Hud.SetAltitudeTarget(null);
+        },
+        IsComplete = () =>
+        {
+            EvaluateDrop();
+            ReloadIfDue();
+            game.Controls.SetContextAvailable(CanRelease);
+            return delivered;
+        },
+        Progress = () =>
+        {
+            if (droppedPackage != null && !droppedPackage.Judged) return "Package falling...";
+            if (reloadAt >= 0f) return FlightHelpers.Warn("Missed. Loading a new package.");
+            string Check(bool ok, string text) => ok ? FlightHelpers.Good(text) : FlightHelpers.Colored(text, PlutoTheme.TextMuted);
+            return Check(OverSpot, "Over target") + "     " + Check(HeightOk, $"Height above roof {HeightAboveRoof:0.00} m")
+                + "     " + Check(SpeedOk, "Steady");
+        },
+        Meter = () => (OverSpot ? 1f : 0f) / 3f + (HeightOk ? 1f : 0f) / 3f + (SpeedOk ? 1f : 0f) / 3f,
+        MeterLabel = () => deliveryAttempts == 0 ? "Ready checks" : $"Attempt {deliveryAttempts + (droppedPackage == null ? 1 : 0)}"
+    };
+
     Stage ReturnStage()
     {
         GameObject beam = null;
@@ -283,4 +441,33 @@ public class RescueMission : GuidedMode
         IsComplete = () => Drone.State == FlightState.Disarmed,
         Progress = () => Drone.Fsm.IsAirborne ? FlightHelpers.Warn("Land first, then disarm.") : "Motors are still spinning. Tap DISARM."
     };
+}
+
+// A released package: real physics, reports once it has settled or fallen away.
+public class DeliveryPackage : MonoBehaviour
+{
+    public bool Done { get; private set; }
+    public bool Lost { get; private set; }
+    public bool Judged { get; set; }
+
+    Rigidbody body;
+    float lostBelowY, age, still;
+    bool touched;
+
+    public void Init(Rigidbody rb, float lostBelowWorldY)
+    {
+        body = rb;
+        lostBelowY = lostBelowWorldY;
+    }
+
+    void OnCollisionEnter(Collision collision) => touched = true;
+
+    void Update()
+    {
+        if (Done || body == null) return;
+        age += Time.deltaTime;
+        if (transform.position.y < lostBelowY) { Lost = true; Done = true; return; }
+        still = touched && body.linearVelocity.sqrMagnitude < 0.0004f ? still + Time.deltaTime : 0f;
+        if (still >= 0.3f || age >= 4f) Done = true;
+    }
 }
